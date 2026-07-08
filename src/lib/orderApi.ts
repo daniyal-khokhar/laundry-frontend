@@ -1,6 +1,6 @@
 import axios from "axios";
 
-// `.env` se URL read karein, agar na mile to fallback lagayein
+// `.env` se URL read karein, live par yeh automatic sahi uthayega
 const API_URL = (import.meta as any).env.VITE_API_BASE_URL || "http://localhost:3002/api";
 
 export const orderApi = {
@@ -10,9 +10,9 @@ export const orderApi = {
     return res.data;
   },
 
-  // 💥 FIXED: Path badal kar '/orders/branch' kiya jo backend par set hai
+  // ✨ FIXED: Path ko backend ke mutabiq sirf '/orders' kiya, kyunki query string backend handle kar rha hy
   getByBranch: async (branchId: string, status?: string) => {
-    const res = await axios.get(`${API_URL}/orders/branch`, {
+    const res = await axios.get(`${API_URL}/orders`, {
       params: { branchId, status },
     });
     return res.data;
