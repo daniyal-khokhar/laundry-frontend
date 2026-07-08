@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_URL = "http://localhost:3002/api";
+const API_URL = "https://decent-laundry-backend.vercel.app/api";
 
 export const orderApi = {
   // GET ALL
