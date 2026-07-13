@@ -115,7 +115,7 @@ export default function HomePage() {
                   </div>
 
                   <div className="mt-3 bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between text-xs">
-                    <span className="text-slate-400">Washing & Ironing Capacity</span>
+                    <span className="text-slate-400">Washing & Pressing Capacity</span>
                     <span className="text-emerald-400 font-bold font-mono">78% Optimal</span>
                   </div>
                 </div>
@@ -181,7 +181,7 @@ export default function HomePage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 text-orange-600 flex-shrink-0" />
-                      <span>Live Status Updates (Wash/Iron)</span>
+                      <span>Live Status Updates (Wash/Press)</span>
                     </div>
                   </div>
                 </CardContent>

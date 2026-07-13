@@ -24,6 +24,12 @@ export const orderApi = {
     return res.data;
   },
 
+    // ✨ NEW: GET ORDER BY ID (single record fetch karne ke liye)
+  getById: async (orderId: string) => {
+    const res = await axios.get(`${API_URL}/orders/${orderId}`);
+    return res.data;
+  },
+
   // UPDATE STATUS
   updateStatus: async (orderId: string, status: string) => {
     const res = await axios.patch(`${API_URL}/orders/${orderId}`, {
