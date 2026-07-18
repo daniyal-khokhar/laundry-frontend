@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { ServiceType, PaymentStatus } from '@/lib/types';
 import toast from 'react-hot-toast';
 import { orderApi } from '@/lib/api';
@@ -64,7 +64,9 @@ interface OrderItem {
 // Short random id generator (jaisa "sl4gr67" backend payload me tha)
 const generateItemId = () => Math.random().toString(36).slice(2, 9);
 
-export default function NewOrderPage() {
+// ✅ FIX: Actual page logic moved into this inner component.
+// This is the component that calls useSearchParams().
+function NewOrderPageContent() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -815,4 +817,20 @@ export default function NewOrderPage() {
       </form>
     </div>
   );
-} 
+}
+
+// ✅ FIX: Default export is now a thin wrapper that provides the
+// required Suspense boundary around the component using useSearchParams().
+export default function NewOrderPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-[60vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      }
+    >
+      <NewOrderPageContent />
+    </Suspense>
+  );
+}
