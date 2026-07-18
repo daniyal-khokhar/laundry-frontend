@@ -720,4 +720,4 @@ export default function OrdersPage() {
       <OrdersPageContent />
     </Suspense>
   );
-}
+} 
