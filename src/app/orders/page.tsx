@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { orderApi } from '@/lib/api';
 import { Order, OrderStatus } from '@/lib/types';
 import { format } from 'date-fns';
@@ -68,7 +68,9 @@ const paymentStatusBadges = {
 
 const ITEMS_PER_PAGE = 10;
 
-export default function OrdersPage() {
+// ✅ FIX: Actual page logic moved into this inner component.
+// This is the component that calls useSearchParams().
+function OrdersPageContent() {
   const router = useRouter();
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -701,5 +703,21 @@ export default function OrdersPage() {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+// ✅ FIX: Default export is now a thin wrapper that provides the
+// required Suspense boundary around the component using useSearchParams().
+export default function OrdersPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-[60vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      }
+    >
+      <OrdersPageContent />
+    </Suspense>
   );
 }
