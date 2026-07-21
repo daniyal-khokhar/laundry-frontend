@@ -38,10 +38,8 @@ import {
   MapPin,
   Mail,
   Calendar,
-  Coins,
   Wallet,
   FileText,
-  X,
 } from "lucide-react";
 import {
   Dialog,
@@ -68,10 +66,11 @@ const paymentStatusBadges = {
 
 const ITEMS_PER_PAGE = 10;
 
-// ✅ FIX: Actual page logic moved into this inner component.
-// This is the component that calls useSearchParams().
 function OrdersPageContent() {
   const router = useRouter();
+
+  // ✅ `orders` is ALWAYS the full, unfiltered list for the selected branch.
+  // Never filter this array directly for display — use `displayedOrders` below.
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [branchId, setBranchId] = useState('1');
@@ -80,8 +79,7 @@ function OrdersPageContent() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [orderToDelete, setOrderToDelete] = useState<any>(null);
   const [deleting, setDeleting] = useState(false);
-
-  // ✨ NEW: Detail/Preview modal state (mobile "Detail" button)
+  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [orderToView, setOrderToView] = useState<any>(null);
 
@@ -90,21 +88,24 @@ function OrdersPageContent() {
   const isEditMode = Boolean(editId);
   const [initialLoading, setInitialLoading] = useState(isEditMode);
 
+  // ✅ FIX: Only refetch when branch changes. Status filtering now happens
+  // entirely on the client, so switching filters no longer re-fetches
+  // (and no longer wipes out the other statuses from `orders`).
   useEffect(() => {
     loadOrders();
-  }, [branchId, filterStatus]);
+  }, [branchId]);
 
+  // Reset to page 1 whenever branch or filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [branchId, filterStatus, orders.length]);
+  }, [branchId, filterStatus]);
 
   const loadOrders = async () => {
     try {
       setLoading(true);
-      const response = await orderApi.getByBranch(
-        branchId,
-        filterStatus === 'all' ? undefined : filterStatus
-      );
+      // ✅ FIX: Always fetch the FULL list for the branch (no status param).
+      // Filtering by status now happens client-side via `displayedOrders`.
+      const response = await orderApi.getByBranch(branchId);
 
       if (response && Array.isArray(response.data)) {
         setOrders(response.data);
@@ -121,54 +122,51 @@ function OrdersPageContent() {
     }
   };
 
+  // ✅ Status update function - calls API endpoint
   const handleStatusUpdate = async (orderId: string, status: OrderStatus) => {
     try {
+      setUpdatingStatus(orderId);
+
+      // ✅ API call to update status
       await orderApi.updateStatus(orderId, status);
+
       toast.success(`Order status updated to ${status}!`);
-      loadOrders();
+
+      // ✅ Reload orders to reflect changes
+      await loadOrders();
+
     } catch (error) {
       toast.error('Failed to update status');
+    } finally {
+      setUpdatingStatus(null);
     }
   };
 
-  const handleDeleteOrder = async (orderId: string) => {
-    if (confirm('Are you sure you want to delete this order?')) {
-      try {
-        if (typeof (orderApi as any).delete === 'function') {
-          await (orderApi as any).delete(orderId);
-        } else {
-          toast.loading('Deleting...', { id: 'delete-toast' });
-        }
-        toast.success('Order deleted successfully', { id: 'delete-toast' });
-        loadOrders();
-      } catch (error) {
-        toast.error('Failed to delete order', { id: 'delete-toast' });
-      }
-    }
-  };
+  // ✅ FIX: This is the list actually rendered in the UI. `orders` itself
+  // stays untouched (full list) so counts below are always accurate.
+  const displayedOrders = filterStatus === 'all'
+    ? orders
+    : orders.filter((o) => o.status === filterStatus);
 
-  const totalPages = Math.max(1, Math.ceil(orders.length / ITEMS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(displayedOrders.length / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
   const startIndex = (safePage - 1) * ITEMS_PER_PAGE;
-  const paginatedOrders = orders.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const paginatedOrders = displayedOrders.slice(startIndex, startIndex + ITEMS_PER_PAGE);
 
   const goToPage = (page: number) => {
     if (page < 1 || page > totalPages) return;
     setCurrentPage(page);
   };
 
-  // ✨ FIXED: Edit par form page navigate ho, id ke sath
   const handleEditOrder = (orderId: string) => {
     router.push(`/new-order?id=${orderId}`);
   };
 
-  // ✨ FIXED: Delete click par sirf modal khole
   const handleDeleteClick = (order: any) => {
     setOrderToDelete(order);
     setDeleteModalOpen(true);
   };
 
-  // ✨ NEW: Modal ke "Delete" button par asal delete
   const confirmDelete = async () => {
     if (!orderToDelete) return;
     setDeleting(true);
@@ -185,16 +183,16 @@ function OrdersPageContent() {
     }
   };
 
-  // ✨ NEW: Detail/Preview modal open karo
   const handleViewDetail = (order: any) => {
     setOrderToView(order);
     setDetailModalOpen(true);
   };
 
-  // ✨ NEW: Status counts for the 3 mobile counters
-  const pendingCount = orders.filter(o => o.orderStatus === 'pending' || o.orderStatus === 'processing').length;
-  const readyCount = orders.filter(o => o.orderStatus === 'ready').length;
-  const deliveredCount = orders.filter(o => o.orderStatus === 'delivered').length;
+  // ✅ FIX: Counts are derived from the FULL `orders` list — NOT from
+  // `displayedOrders` — so they stay correct no matter which filter is active.
+  const pendingCount = orders.filter(o => o.status === 'pending' || o.status === 'processing').length;
+  const readyCount = orders.filter(o => o.status === 'ready').length;
+  const deliveredCount = orders.filter(o => o.status === 'delivered').length;
 
   if (loading) {
     return (
@@ -208,7 +206,7 @@ function OrdersPageContent() {
     <>
       <div className="space-y-4 md:space-y-6 max-w-full">
 
-        {/* --- DESKTOP ONLY HEADER & FILTERS PANEL --- */}
+        {/* DESKTOP ONLY HEADER & FILTERS PANEL */}
         <div className="hidden md:flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 px-1">
           <div>
             <h1 className="text-xl font-semibold tracking-tight text-gray-900">All Orders</h1>
@@ -262,11 +260,12 @@ function OrdersPageContent() {
           </div>
         </div>
 
-        {/* --- MOBILE ONLY HEADER --- */}
+        {/* MOBILE ONLY HEADER */}
         <div className="flex md:hidden items-center justify-between px-1">
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-gray-900">All Orders</h1>
-            <p className="text-xs text-gray-500">{orders.length} total orders</p>
+            {/* ✅ FIX: reflects the currently displayed (filtered) count */}
+            <p className="text-xs text-gray-500">{displayedOrders.length} total orders</p>
           </div>
           <Button
             size="icon"
@@ -278,10 +277,10 @@ function OrdersPageContent() {
           </Button>
         </div>
 
-        {/* --- MOBILE ONLY STATUS COUNTERS: pending / ready / delivered with text --- */}
+        {/* ✅ MOBILE ONLY STATUS COUNTERS: pending / ready / delivered */}
         <div className="flex md:hidden items-center justify-between bg-white border border-gray-100 p-2 rounded-xl shadow-sm mb-1">
           <div className="grid grid-cols-3 w-full gap-1.5">
-            {/* Pending Counter */}
+            {/* ✅ Pending Counter - click to filter pending orders */}
             <button
               type="button"
               onClick={() => setFilterStatus(filterStatus === 'pending' ? 'all' : 'pending')}
@@ -298,7 +297,7 @@ function OrdersPageContent() {
               <span className="text-[10px] font-semibold text-gray-600">Pending</span>
             </button>
 
-            {/* Ready Counter */}
+            {/* ✅ Ready Counter - click to filter ready orders */}
             <button
               type="button"
               onClick={() => setFilterStatus(filterStatus === 'ready' ? 'all' : 'ready')}
@@ -315,7 +314,7 @@ function OrdersPageContent() {
               <span className="text-[10px] font-semibold text-gray-600">Ready</span>
             </button>
 
-            {/* Delivered Counter */}
+            {/* ✅ Delivered Counter - click to filter delivered orders */}
             <button
               type="button"
               onClick={() => setFilterStatus(filterStatus === 'delivered' ? 'all' : 'delivered')}
@@ -335,13 +334,13 @@ function OrdersPageContent() {
         </div>
 
         {/* No Orders State */}
-        {orders.length === 0 ? (
+        {displayedOrders.length === 0 ? (
           <Card className="border-gray-200/80 shadow-sm bg-white rounded-lg p-8 text-center text-gray-400 text-sm">
             No orders found in this branch filter.
           </Card>
         ) : (
           <>
-            {/* 📱 MOBILE VIEW: Card layout with name, qty, price, dress code + Detail button */}
+            {/* ✅ MOBILE VIEW: Card layout with status update options */}
             <div className="flex flex-col gap-2 md:hidden">
               {paginatedOrders.map((order, index) => (
                 <div
@@ -355,8 +354,8 @@ function OrdersPageContent() {
                         <span className="font-mono font-bold text-xs text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded">
                           #{order.dressCode || 'N/A'}
                         </span>
-                        <Badge variant="outline" className={`capitalize text-[10px] font-semibold px-1.5 py-0 ${statusColors[order.orderStatus as OrderStatus] || statusColors.pending}`}>
-                          {order.orderStatus || 'pending'}
+                        <Badge variant="outline" className={`capitalize text-[10px] font-semibold px-1.5 py-0 ${statusColors[order.status as OrderStatus] || statusColors.pending}`}>
+                          {order.status || 'pending'}
                         </Badge>
                         {order.paymentStatus === 'unpaid' && (
                           <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
@@ -376,24 +375,54 @@ function OrdersPageContent() {
                       >
                         <Eye className="h-4 w-4 text-blue-600" />
                       </button>
+
+                      {/* ✅ FIXED DROPDOWN MENU */}
                       <DropdownMenu>
                         <DropdownMenuTrigger>
-                          <button className="focus:outline-none p-1.5 hover:bg-gray-100 rounded-full transition-colors">
+                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 rounded-full hover:bg-gray-100">
                             <MoreVertical className="h-4 w-4 text-gray-500" />
-                          </button>
+                          </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40 bg-white shadow-xl border border-gray-100 rounded-lg p-1 z-[100]">
+                        <DropdownMenuContent align="end" className="w-48 bg-white shadow-xl border border-gray-100 rounded-lg p-1 z-50">
                           <DropdownMenuItem onClick={() => handleViewDetail(order)} className="flex items-center gap-2 px-2 py-2 text-xs text-gray-700 hover:bg-gray-50 rounded cursor-pointer">
                             <Eye className="h-3.5 w-3.5" /> View Detail
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleEditOrder(order._id)} className="flex items-center gap-2 px-2 py-2 text-xs text-gray-700 hover:bg-gray-50 rounded cursor-pointer">
                             <Pencil className="h-3.5 w-3.5" /> Edit Order
                           </DropdownMenuItem>
-                          {order.orderStatus === 'pending' && (
-                            <DropdownMenuItem onClick={() => handleStatusUpdate(order._id, 'processing')} className="flex items-center gap-2 px-2 py-2 text-xs text-blue-600 hover:bg-blue-50 rounded cursor-pointer">
-                              Start Process
+
+                          {/* ✅ READY option - only for pending/processing orders */}
+                          {(order.status === 'pending' || order.status === 'processing') && (
+                            <DropdownMenuItem
+                              onClick={() => handleStatusUpdate(order._id, 'ready')}
+                              className="flex items-center gap-2 px-2 py-2 text-xs text-emerald-600 hover:bg-emerald-50 rounded cursor-pointer"
+                              disabled={updatingStatus === order._id}
+                            >
+                              {updatingStatus === order._id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <PackageCheck className="h-3.5 w-3.5" />
+                              )}
+                              Mark as Ready
                             </DropdownMenuItem>
                           )}
+
+                          {/* ✅ DELIVERED option - only for ready orders */}
+                          {order.status === 'ready' && (
+                            <DropdownMenuItem
+                              onClick={() => handleStatusUpdate(order._id, 'delivered')}
+                              className="flex items-center gap-2 px-2 py-2 text-xs text-slate-600 hover:bg-slate-50 rounded cursor-pointer"
+                              disabled={updatingStatus === order._id}
+                            >
+                              {updatingStatus === order._id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              )}
+                              Mark as Delivered
+                            </DropdownMenuItem>
+                          )}
+
                           <DropdownMenuItem onClick={() => handleDeleteClick(order)} className="flex items-center gap-2 px-2 py-2 text-xs text-red-600 hover:bg-red-50 rounded cursor-pointer">
                             <Trash2 className="h-3.5 w-3.5" /> Delete
                           </DropdownMenuItem>
@@ -414,7 +443,7 @@ function OrdersPageContent() {
               ))}
             </div>
 
-            {/* 💻 DESKTOP VIEW: Legacy Table Dashboard layout */}
+            {/* DESKTOP VIEW: Table layout */}
             <Card className="hidden md:block border-gray-200/80 shadow-sm bg-white rounded-lg overflow-hidden">
               <CardContent className="p-0">
                 <div className="w-full overflow-x-auto">
@@ -429,7 +458,7 @@ function OrdersPageContent() {
                         <TableHead className="text-xs font-semibold text-gray-500">Payment</TableHead>
                         <TableHead className="text-xs font-semibold text-gray-500">Status</TableHead>
                         <TableHead className="text-xs font-semibold text-gray-500">Date</TableHead>
-                        <TableHead className="text-right text-xs font-semibold text-gray-500 pr-6">Management Actions</TableHead>
+                        <TableHead className="text-right text-xs font-semibold text-gray-500 pr-6">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -456,8 +485,8 @@ function OrdersPageContent() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={`capitalize text-[11px] font-semibold ${statusColors[order.orderStatus as OrderStatus] || statusColors.pending}`}>
-                              {order.orderStatus || 'pending'}
+                            <Badge variant="outline" className={`capitalize text-[11px] font-semibold ${statusColors[order.status as OrderStatus] || statusColors.pending}`}>
+                              {order.status || 'pending'}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-xs text-gray-500 font-mono">
@@ -472,13 +501,32 @@ function OrdersPageContent() {
                               >
                                 <Eye className="h-4 w-4 text-blue-600" />
                               </button>
+
+                              {/* ✅ FIXED DESKTOP DROPDOWN */}
                               <DropdownMenu>
                                 <DropdownMenuTrigger>
-                                  <Button variant="ghost" className="h-7 w-7 p-0 rounded-full"><MoreVertical className="h-4 w-4" /></Button>
+                                  <Button variant="ghost" className="h-7 w-7 p-0 rounded-full">
+                                    <MoreVertical className="h-4 w-4" />
+                                  </Button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="bg-white border">
-                                  <DropdownMenuItem onClick={() => handleEditOrder(order._id)}>Edit</DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleDeleteClick(order)} className="text-red-600">Delete</DropdownMenuItem>
+                                <DropdownMenuContent align="end" className="bg-white border shadow-lg z-50">
+                                  <DropdownMenuItem onClick={() => handleEditOrder(order._id)}>
+                                    <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
+                                  </DropdownMenuItem>
+                                  {/* ✅ Desktop status update options */}
+                                  {(order.status === 'pending' || order.status === 'processing') && (
+                                    <DropdownMenuItem onClick={() => handleStatusUpdate(order._id, 'ready')} className="text-emerald-600">
+                                      <PackageCheck className="h-3.5 w-3.5 mr-2" /> Mark Ready
+                                    </DropdownMenuItem>
+                                  )}
+                                  {order.status === 'ready' && (
+                                    <DropdownMenuItem onClick={() => handleStatusUpdate(order._id, 'delivered')} className="text-slate-600">
+                                      <CheckCircle2 className="h-3.5 w-3.5 mr-2" /> Mark Delivered
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem onClick={() => handleDeleteClick(order)} className="text-red-600">
+                                    <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete
+                                  </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
@@ -491,11 +539,11 @@ function OrdersPageContent() {
               </CardContent>
             </Card>
 
-            {/* --- PAGINATION CONTROLS --- */}
+            {/* PAGINATION CONTROLS */}
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-1 pt-2 gap-2">
                 <p className="text-xs text-gray-500 hidden sm:block">
-                  Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, orders.length)} of {orders.length}
+                  Showing {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, displayedOrders.length)} of {displayedOrders.length}
                 </p>
                 <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto justify-center sm:justify-end">
                   <Button
@@ -536,7 +584,7 @@ function OrdersPageContent() {
         )}
       </div>
 
-      {/* ✨ Order Detail / Preview Modal (mobile "Detail" button opens this) */}
+      {/* Order Detail / Preview Modal */}
       <Dialog open={detailModalOpen} onOpenChange={setDetailModalOpen}>
         <DialogContent className="sm:max-w-md w-[92vw] rounded-xl max-h-[85vh] overflow-y-auto bg-white z-[100] border border-gray-200 shadow-2xl">
           <DialogHeader>
@@ -551,17 +599,15 @@ function OrdersPageContent() {
 
           {orderToView && (
             <div className="space-y-4 text-sm">
-              {/* Status badges */}
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className={`capitalize text-[11px] font-semibold ${statusColors[orderToView.orderStatus as OrderStatus] || statusColors.pending}`}>
-                  {orderToView.orderStatus || 'pending'}
+                <Badge variant="outline" className={`capitalize text-[11px] font-semibold ${statusColors[orderToView.status as OrderStatus] || statusColors.pending}`}>
+                  {orderToView.status || 'pending'}
                 </Badge>
                 <Badge variant="outline" className={`capitalize text-[11px] font-semibold ${paymentStatusBadges[orderToView.paymentStatus as keyof typeof paymentStatusBadges] || 'bg-gray-100 text-gray-800'}`}>
                   {orderToView.paymentStatus || 'unpaid'}
                 </Badge>
               </div>
 
-              {/* Customer Info */}
               <div className="space-y-2 border-t border-gray-100 pt-3">
                 <p className="text-xs font-bold uppercase tracking-wider text-gray-500">Customer</p>
                 <p className="font-semibold text-gray-900">{orderToView.customerName || 'Walk-in'}</p>
@@ -585,7 +631,6 @@ function OrdersPageContent() {
                 )}
               </div>
 
-              {/* Order Info */}
               <div className="space-y-2 border-t border-gray-100 pt-3">
                 <p className="text-xs font-bold uppercase tracking-wider text-gray-500">Order</p>
                 <div className="grid grid-cols-2 gap-y-2 gap-x-3">
@@ -639,7 +684,6 @@ function OrdersPageContent() {
                 )}
               </div>
 
-              {/* Items breakdown, if the order was created with multiple items */}
               {Array.isArray(orderToView.itemsList) && orderToView.itemsList.length > 0 && (
                 <div className="space-y-2 border-t border-gray-100 pt-3">
                   <p className="text-xs font-bold uppercase tracking-wider text-gray-500">Items</p>
@@ -674,9 +718,9 @@ function OrdersPageContent() {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal */}
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
-        <DialogContent className="sm:max-w-md w-[92vw] rounded-xl bg-white z-[100] border border-gray-200 shadow-2xl">
+        <DialogContent className="sm:max-md w-[92vw] rounded-xl bg-white z-[100] border border-gray-200 shadow-2xl">
           <DialogHeader>
             <DialogTitle>Delete Order?</DialogTitle>
             <DialogDescription>
@@ -706,8 +750,6 @@ function OrdersPageContent() {
   );
 }
 
-// ✅ FIX: Default export is now a thin wrapper that provides the
-// required Suspense boundary around the component using useSearchParams().
 export default function OrdersPage() {
   return (
     <Suspense
@@ -720,4 +762,4 @@ export default function OrdersPage() {
       <OrdersPageContent />
     </Suspense>
   );
-} 
+}

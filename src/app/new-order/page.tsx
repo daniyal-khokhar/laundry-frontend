@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect } from 'react';
 import { ServiceType, PaymentStatus } from '@/lib/types';
 import toast from 'react-hot-toast';
 import { orderApi } from '@/lib/api';
+import { itemApi } from '@/lib/itemApi';
 
 // Shadcn UI Components
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,6 +18,14 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 // Modern UI Lucide Icons
 import {
@@ -27,8 +36,6 @@ import {
   QrCode,
   Layers,
   FileText,
-  Hash,
-  Coins,
   Calendar,
   Building2,
   CreditCard,
@@ -43,17 +50,11 @@ import {
   Trash2,
   ShoppingBag,
   Receipt,
+  Lock,
 } from "lucide-react";
 import { useRouter, useSearchParams } from 'next/navigation';
 
-const serviceTypes = [
-  { value: 'wash', label: '🧺 Wash' },
-  { value: 'Press', label: '👔 Press' },
-  { value: 'dry-clean', label: '🧼 Dry Clean' },
-];
-
-// ✨ Ek order me multiple items (cart) rakhne ke liye type — backend payload shape ke mutabiq
-// { id, serviceType, quantity, itemPrice }
+// Order item interface
 interface OrderItem {
   id: string;
   serviceType: string;
@@ -61,11 +62,15 @@ interface OrderItem {
   itemPrice: number;
 }
 
-// Short random id generator (jaisa "sl4gr67" backend payload me tha)
+// Short random id generator
 const generateItemId = () => Math.random().toString(36).slice(2, 9);
 
-// ✅ FIX: Actual page logic moved into this inner component.
-// This is the component that calls useSearchParams().
+// Fetch available items from API
+const fetchAvailableItems = async () => {
+  const response = await itemApi.getAll();
+  return Array.isArray(response) ? response : (response?.data || []);
+};
+
 function NewOrderPageContent() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -76,34 +81,34 @@ function NewOrderPageContent() {
     customerName: '',
     customerPhone: '',
     customerAddress: '',
-    customerEmail: '',
-    dressCode: '', // Ab isme sirf numbers store honge (e.g., "12")
+    dressCode: '',
     dressDescription: '',
     paymentStatus: 'unpaid' as PaymentStatus,
     paymentMethod: 'cash' as 'cash' | 'account' | 'online',
     deliveryDate: '',
     notes: '',
+    status: 'pending',
   });
 
-  // ✨ Item draft — abhi jo item form me select ho raha hai, "Add Item" click hone tak
-  const [itemDraft, setItemDraft] = useState({
-    serviceType: 'wash',
-    quantity: 1,
-    price: 0,
-  });
-
-  // ✨ Cart — jitne items add ho chuke hain is order ke liye (payload me "itemsList" jayega)
+  // Cart items
   const [itemsList, setItemsList] = useState<OrderItem[]>([]);
+
+  // Item picker modal state
+  const [itemPickerOpen, setItemPickerOpen] = useState(false);
+  const [availableItems, setAvailableItems] = useState<any[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
   const searchParams = useSearchParams();
   const editId = searchParams.get('id');
   const isEditMode = Boolean(editId);
   const [initialLoading, setInitialLoading] = useState(isEditMode);
 
-  // ✨ Cart totals — quantity aur price dono auto badhtay hain jab item increase ho
+  // Cart totals
   const totalQuantity = itemsList.reduce((sum, it) => sum + it.quantity, 0);
   const grandTotal = itemsList.reduce((sum, it) => sum + it.quantity * it.itemPrice, 0);
 
+  // Auto-search for existing customer/order
   const handleAutoSearch = async (searchType: 'name' | 'code', value: string) => {
     if (isEditMode) return;
     if (!value || value.trim().length < 2) return;
@@ -155,15 +160,14 @@ function NewOrderPageContent() {
           customerName: existingRecord.customerName || prev.customerName,
           customerPhone: existingRecord.customerPhone || prev.customerPhone,
           customerAddress: existingRecord.customerAddress || prev.customerAddress,
-          customerEmail: existingRecord.customerEmail || prev.customerEmail,
           dressCode: cleanDressCode || prev.dressCode,
           dressDescription: existingRecord.dressDescription || prev.dressDescription,
           paymentStatus: existingRecord.paymentStatus || prev.paymentStatus,
           paymentMethod: existingRecord.paymentMethod || prev.paymentMethod,
           notes: existingRecord.notes || prev.notes,
+          status: existingRecord.status || prev.status,
         }));
 
-        // ✨ Agar purana record itemsList ke sath hai to wahi as-is le aayein
         if (Array.isArray(existingRecord.itemsList) && existingRecord.itemsList.length > 0) {
           setItemsList(existingRecord.itemsList.map((it: any, i: number) => ({
             id: it.id || generateItemId(),
@@ -172,7 +176,6 @@ function NewOrderPageContent() {
             itemPrice: it.itemPrice ?? it.price ?? 0,
           })));
         } else if (existingRecord.serviceType || existingRecord.price) {
-          // Legacy single-item order -> ek item bana lo
           setItemsList([{
             id: generateItemId(),
             serviceType: existingRecord.serviceType || 'wash',
@@ -192,51 +195,80 @@ function NewOrderPageContent() {
     }
   };
 
-  // ✨ "Add Item" button — draft ko cart me daal do.
-  // Agar same service type + same price wala item already list me hai, uski quantity hi badha do (increase hoti rahay, price khud-b-khud barh jayegi).
-  const handleAddItem = () => {
-    if (!itemDraft.price || itemDraft.price <= 0) {
-      toast.error('Please enter a valid price for this item');
-      return;
+  // Open item picker modal
+  const openItemPicker = async () => {
+    setItemPickerOpen(true);
+    setSelectedItemIds(new Set());
+    setItemsLoading(true);
+
+    try {
+      const items = await fetchAvailableItems();
+      setAvailableItems(items);
+    } catch (err) {
+      toast.error('Failed to load items list');
+      setAvailableItems([]);
+    } finally {
+      setItemsLoading(false);
     }
-    if (!itemDraft.quantity || itemDraft.quantity <= 0) {
-      toast.error('Please enter a valid quantity');
+  };
+
+  // Toggle item selection
+  const toggleItemSelect = (id: string) => {
+    setSelectedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Add selected items to cart
+  const handleConfirmAddItems = () => {
+    if (selectedItemIds.size === 0) {
+      toast.error('Please select at least one item');
       return;
     }
 
     setItemsList(prev => {
-      const existingIndex = prev.findIndex(
-        it => it.serviceType === itemDraft.serviceType && it.itemPrice === itemDraft.price
-      );
+      let updated = [...prev];
 
-      if (existingIndex > -1) {
-        // Same item dobara add ho raha hai -> quantity barhado (total khud recalc ho jata hai)
-        const updated = [...prev];
-        const existing = updated[existingIndex];
-        updated[existingIndex] = {
-          ...existing,
-          quantity: existing.quantity + itemDraft.quantity,
-        };
-        return updated;
-      }
+      selectedItemIds.forEach((id) => {
+        const apiItem = availableItems.find((a) => (a._id || a.id) === id);
+        if (!apiItem) return;
 
-      // Naya item
-      return [
-        ...prev,
-        {
-          id: generateItemId(),
-          serviceType: itemDraft.serviceType,
-          quantity: itemDraft.quantity,
-          itemPrice: itemDraft.price,
-        },
-      ];
+        const name = apiItem.itemName || apiItem.serviceType || apiItem.title || 'Item';
+        const price = apiItem.price ?? apiItem.itemPrice ?? 0;
+
+        const existingIndex = updated.findIndex(
+          (it) => it.serviceType === name && it.itemPrice === price
+        );
+
+        if (existingIndex > -1) {
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: updated[existingIndex].quantity + 1,
+          };
+        } else {
+          updated.push({
+            id: generateItemId(),
+            serviceType: name,
+            quantity: 1,
+            itemPrice: price,
+          });
+        }
+      });
+
+      return updated;
     });
 
-    toast.success('Item added to order! 🧺');
-    setItemDraft(prev => ({ ...prev, quantity: 1, price: 0 }));
+    toast.success('Items added to order! 🧺');
+    setItemPickerOpen(false);
   };
 
-  // ✨ cart me kisi item ki quantity ±1 karo, price/total khud badh/ghat jaye
+  // Cart item controls
   const handleIncreaseItem = (id: string) => {
     setItemsList(prev => prev.map(it =>
       it.id === id ? { ...it, quantity: it.quantity + 1 } : it
@@ -253,50 +285,50 @@ function NewOrderPageContent() {
     setItemsList(prev => prev.filter(it => it.id !== id));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Submit order
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
 
-    if (itemsList.length === 0) {
-      toast.error('Please add at least one item to the order');
-      return;
+  if (itemsList.length === 0) {
+    toast.error('Please add at least one item to the order');
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const finalDressCode = formData.dressCode ? `D-${formData.dressCode.replace(/^D-/, '')}` : '';
+
+    const payload = {
+      ...formData,
+      status: formData.status,
+      dressCode: finalDressCode,
+      itemsList,
+      serviceType: itemsList[0]?.serviceType || 'wash',
+      quantity: totalQuantity,
+      price: grandTotal,
+      deliveryDate: formData.deliveryDate ? new Date(formData.deliveryDate) : undefined,
+    };
+
+    if (isEditMode && editId) {
+      await orderApi.update(editId, payload);
+      toast.success('Order updated successfully!');
+    } else {
+      const order = await orderApi.create(payload);
+      toast.success(`Order ${order.orderNumber || 'successfully'} created!`);
     }
 
-    setLoading(true);
+    router.push('/orders');
+  } catch (error) {
+    toast.error(isEditMode ? 'Failed to update order.' : 'Failed to create order. Please try again.');
+  } finally {
+    setLoading(false);
+  }
+};
 
-    try {
-      const finalDressCode = formData.dressCode ? `D-${formData.dressCode.replace(/^D-/, '')}` : '';
-
-      // ✨ payload backend DTO/schema ke mutabiq: itemsList[] + top-level serviceType/quantity/price
-      // (total quantity aur grand total) backward-compatibility ke liye
-      const payload = {
-        ...formData,
-        dressCode: finalDressCode,
-        itemsList,
-        serviceType: itemsList[0]?.serviceType || 'wash',
-        quantity: totalQuantity,
-        price: grandTotal,
-        deliveryDate: formData.deliveryDate ? new Date(formData.deliveryDate) : undefined,
-      };
-
-      if (isEditMode && editId) {
-        await orderApi.update(editId, payload);
-        toast.success('Order updated successfully!');
-      } else {
-        const order = await orderApi.create(payload);
-        toast.success(`Order ${order.orderNumber || 'successfully'} created!`);
-      }
-
-      router.push('/orders');
-    } catch (error) {
-      toast.error(isEditMode ? 'Failed to update order.' : 'Failed to create order. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Quick helper to auto-generate unique numbers instantly
+  // Generate dress code
   const generateDressCode = () => {
-    const randomSuffix = Math.floor(10 + Math.random() * 90); // 2 digit random number
+    const randomSuffix = Math.floor(10 + Math.random() * 90);
     setFormData(prev => ({ ...prev, dressCode: String(randomSuffix) }));
     toast.success('Dress Number Generated! ✨', { icon: '🪄' });
   };
@@ -312,18 +344,18 @@ function NewOrderPageContent() {
       customerName: '',
       customerPhone: '',
       customerAddress: '',
-      customerEmail: '',
       dressCode: '',
       dressDescription: '',
       paymentStatus: 'unpaid',
       paymentMethod: 'cash',
       deliveryDate: '',
       notes: '',
+      status: '',
     });
     setItemsList([]);
-    setItemDraft({ serviceType: 'wash', quantity: 1, price: 0 });
   };
 
+  // Load order for edit
   useEffect(() => {
     if (!editId) return;
 
@@ -345,7 +377,6 @@ function NewOrderPageContent() {
           customerName: order.customerName || '',
           customerPhone: order.customerPhone || '',
           customerAddress: order.customerAddress || '',
-          customerEmail: order.customerEmail || '',
           dressCode: order.dressCode ? order.dressCode.replace(/^D-/, '') : '',
           dressDescription: order.dressDescription || '',
           paymentStatus: order.paymentStatus || 'unpaid',
@@ -354,10 +385,9 @@ function NewOrderPageContent() {
             ? new Date(order.deliveryDate).toISOString().split('T')[0]
             : '',
           notes: order.notes || '',
+          status: order.status || '',
         });
 
-        // ✨ Agar order pehle se itemsList ke sath bana tha to wahi load karo,
-        // warna legacy single serviceType/quantity/price ko ek item bana lo
         if (Array.isArray(order.itemsList) && order.itemsList.length > 0) {
           setItemsList(order.itemsList.map((it: any, i: number) => ({
             id: it.id || generateItemId(),
@@ -395,7 +425,7 @@ function NewOrderPageContent() {
   return (
     <div className="space-y-4 md:space-y-6 max-w-full">
 
-      {/* --- HEADER WITH BACK ARROW BUTTON --- */}
+      {/* HEADER WITH BACK ARROW BUTTON */}
       <div className="flex items-center justify-between gap-4 px-1">
         <div>
           <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-gray-900">
@@ -418,11 +448,60 @@ function NewOrderPageContent() {
         </Button>
       </div>
 
+      {/* Loading banner while searching */}
+      {searching && (
+        <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600 shrink-0" />
+          <span className="text-xs font-semibold text-blue-700">Checking previous record, please wait...</span>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <Card className="border-gray-200/80 shadow-sm bg-white rounded-xl overflow-hidden">
           <CardContent className="p-3 sm:p-6 space-y-6">
 
-            {/* --- SECTION 1: CUSTOMER INFORMATION --- */}
+            {/* SECTION 0: DRESS CODE */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 pb-1 border-b border-gray-100">
+                <QrCode className="h-4 w-4 text-blue-600 shrink-0" />
+                <h2 className="text-xs font-bold tracking-wider text-gray-700 uppercase flex items-center gap-2">
+                  Dress Code
+                  {searching && <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
+                </h2>
+              </div>
+
+              <div className="space-y-1 max-w-full sm:max-w-xs">
+                <label className="text-xs font-medium text-gray-600 flex justify-between items-center">
+                  <span>Dress Code *</span>
+                  <button
+                    type="button"
+                    onClick={generateDressCode}
+                    disabled={searching}
+                    className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Sparkles className="h-3 w-3" /> Auto-Gen
+                  </button>
+                </label>
+                <div className="relative flex items-center">
+                  <div className="absolute left-3 flex items-center pointer-events-none gap-1">
+                    <QrCode className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="text-sm font-bold text-blue-600 bg-blue-50 px-1 rounded border border-blue-200/60 font-mono">D-</span>
+                  </div>
+                  <Input
+                    type="text"
+                    required
+                    placeholder="256"
+                    disabled={searching}
+                    value={formData.dressCode}
+                    onChange={(e) => setFormData(p => ({ ...p, dressCode: e.target.value.replace(/[^a-zA-Z0-9]/g, '') }))}
+                    onBlur={(e) => handleAutoSearch('code', e.target.value)}
+                    className="h-10 sm:h-9 pl-[58px] bg-gray-50/50 border-gray-200 font-mono text-sm focus-visible:ring-blue-500 uppercase tracking-wider disabled:opacity-60"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 1: CUSTOMER INFORMATION */}
             <div className="space-y-3">
               <div className="flex items-center gap-2 pb-1 border-b border-gray-100">
                 <User className="h-4 w-4 text-blue-600 shrink-0" />
@@ -440,10 +519,11 @@ function NewOrderPageContent() {
                     <Input
                       type="text"
                       required
+                      disabled={searching}
                       value={formData.customerName}
                       onChange={(e) => setFormData(p => ({ ...p, customerName: e.target.value }))}
                       onBlur={(e) => handleAutoSearch('name', e.target.value)}
-                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm"
+                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
                       placeholder="e.g. Muhammad Daniyal"
                     />
                   </div>
@@ -456,24 +536,11 @@ function NewOrderPageContent() {
                     <Input
                       type="tel"
                       required
+                      disabled={searching}
                       value={formData.customerPhone}
                       onChange={(e) => setFormData(p => ({ ...p, customerPhone: e.target.value }))}
-                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm"
+                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
                       placeholder="03xx xxxxxxx"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-gray-600">Email</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
-                    <Input
-                      type="email"
-                      value={formData.customerEmail}
-                      onChange={(e) => setFormData(p => ({ ...p, customerEmail: e.target.value }))}
-                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm"
-                      placeholder="customer@example.com"
                     />
                   </div>
                 </div>
@@ -485,9 +552,10 @@ function NewOrderPageContent() {
                     <Textarea
                       name="customerAddress"
                       rows={1}
+                      disabled={searching}
                       value={formData.customerAddress}
                       onChange={(e) => setFormData(p => ({ ...p, customerAddress: e.target.value }))}
-                      className="pl-9 min-h-[40px] sm:min-h-[38px] bg-gray-50/50 border-gray-200 resize-none focus-visible:ring-blue-500 text-sm py-2"
+                      className="pl-9 min-h-[40px] sm:min-h-[38px] bg-gray-50/50 border-gray-200 resize-none focus-visible:ring-blue-500 text-sm py-2 disabled:opacity-60"
                       placeholder="Street, City, Area"
                     />
                   </div>
@@ -495,7 +563,7 @@ function NewOrderPageContent() {
               </div>
             </div>
 
-            {/* --- SECTION 2: DRESS CODE / BRANCH / DELIVERY --- */}
+            {/* SECTION 2: ORDER DETAILS */}
             <div className="space-y-3">
               <div className="flex items-center gap-2 pb-1 border-b border-gray-100">
                 <Layers className="h-4 w-4 text-blue-600 shrink-0" />
@@ -504,79 +572,20 @@ function NewOrderPageContent() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-gray-600 flex justify-between items-center">
-                    <span>Dress Code *</span>
-                    <button
-                      type="button"
-                      onClick={generateDressCode}
-                      className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 transition-all"
-                    >
-                      <Sparkles className="h-3 w-3" /> Auto-Gen
-                    </button>
-                  </label>
-                  <div className="relative flex items-center">
-                    <div className="absolute left-3 flex items-center pointer-events-none gap-1">
-                      <QrCode className="h-3.5 w-3.5 text-gray-400" />
-                      <span className="text-sm font-bold text-blue-600 bg-blue-50 px-1 rounded border border-blue-200/60 font-mono">D-</span>
-                    </div>
-                    <Input
-                      type="text"
-                      required
-                      placeholder="256"
-                      value={formData.dressCode}
-                      onChange={(e) => setFormData(p => ({ ...p, dressCode: e.target.value.replace(/[^a-zA-Z0-9]/g, '') }))}
-                      onBlur={(e) => handleAutoSearch('code', e.target.value)}
-                      className="h-10 sm:h-9 pl-[58px] bg-gray-50/50 border-gray-200 font-mono text-sm focus-visible:ring-blue-500 uppercase tracking-wider"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-600">Delivery Date</label>
                   <div className="relative">
                     <Calendar className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
                     <Input
                       type="date"
+                      disabled={searching}
                       value={formData.deliveryDate}
                       onChange={(e) => setFormData(p => ({ ...p, deliveryDate: e.target.value }))}
-                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm"
+                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
                     />
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-gray-600">Branch *</label>
-                  <Select
-                    value={formData.branchId}
-                    onValueChange={(value) => {
-                      const safeValue = value || '1';
-                      const branchMap: { [key: string]: string } = {
-                        '1': 'D1',
-                        '2': 'D2',
-                        '3': 'D3',
-                      };
-                      setFormData((prev) => ({
-                        ...prev,
-                        branchId: safeValue,
-                        branchCode: branchMap[safeValue] || 'D1',
-                      }));
-                    }}
-                  >
-                    <SelectTrigger className="h-10 sm:h-9 w-full bg-gray-50/50 border-gray-200 text-sm">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                        <SelectValue placeholder="Select Branch" />
-                      </div>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">Decent1 (D1)</SelectItem>
-                      <SelectItem value="2">Decent2 (D2)</SelectItem>
-                      <SelectItem value="3">Decent3 (D3)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1">
+                <div className="sm:col-span-2 space-y-1">
                   <label className="text-xs font-medium text-gray-600">Dress Description</label>
                   <div className="relative">
                     <FileText className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
@@ -584,79 +593,30 @@ function NewOrderPageContent() {
                       name="dressDescription"
                       rows={1}
                       placeholder="Color, fabric details, or specific stains..."
+                      disabled={searching}
                       value={formData.dressDescription}
                       onChange={(e) => setFormData(p => ({ ...p, dressDescription: e.target.value }))}
-                      className="pl-9 min-h-[40px] sm:min-h-[38px] bg-gray-50/50 border-gray-200 resize-none focus-visible:ring-blue-500 text-sm py-2"
+                      className="pl-9 min-h-[40px] sm:min-h-[38px] bg-gray-50/50 border-gray-200 resize-none focus-visible:ring-blue-500 text-sm py-2 disabled:opacity-60"
                     />
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* --- SECTION 3: ITEMS (CART) — Add Item button, list with +/- to grow qty & price, running total --- */}
+            {/* SECTION 3: ITEMS (CART) */}
             <div className="space-y-3">
-              <div className="flex items-center gap-2 pb-1 border-b border-gray-100">
-                <ShoppingBag className="h-4 w-4 text-blue-600 shrink-0" />
-                <h2 className="text-xs font-bold tracking-wider text-gray-700 uppercase">Items</h2>
-              </div>
-
-              {/* Item draft picker */}
-              <div className="bg-gray-50/60 border border-gray-200 rounded-lg p-3 space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="col-span-2 sm:col-span-2 space-y-1">
-                    <label className="text-xs font-medium text-gray-600">Service Type</label>
-                    <Select
-                      value={itemDraft.serviceType}
-                      onValueChange={(val) => setItemDraft(p => ({ ...p, serviceType: val || 'wash' }))}
-                    >
-                      <SelectTrigger className="h-10 sm:h-9 w-full bg-white border-gray-200 text-sm">
-                        <SelectValue placeholder="Select service" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {serviceTypes.map((type) => (
-                          <SelectItem key={type.value} value={type.value}>
-                            {type.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">Qty</label>
-                    <div className="relative">
-                      <Hash className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
-                      <Input
-                        type="number"
-                        min="1"
-                        value={itemDraft.quantity}
-                        onChange={(e) => setItemDraft(p => ({ ...p, quantity: Math.max(1, Number(e.target.value)) }))}
-                        className="h-10 sm:h-9 pl-9 bg-white border-gray-200 focus-visible:ring-blue-500 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-gray-600">Price (Rs.)</label>
-                    <div className="relative">
-                      <Coins className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={itemDraft.price || ''}
-                        onChange={(e) => setItemDraft(p => ({ ...p, price: Number(e.target.value) }))}
-                        className="h-10 sm:h-9 pl-9 bg-white border-gray-200 font-semibold focus-visible:ring-blue-500 text-sm"
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
+              <div className="flex items-center justify-between pb-1 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <ShoppingBag className="h-4 w-4 text-blue-600 shrink-0" />
+                  <h2 className="text-xs font-bold tracking-wider text-gray-700 uppercase">Items</h2>
                 </div>
 
                 <Button
                   type="button"
-                  onClick={handleAddItem}
-                  className="w-full h-9 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold gap-1.5"
+                  size="sm"
+                  disabled={searching}
+                  onClick={openItemPicker}
+                  className="h-8 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold gap-1.5 disabled:opacity-60"
                 >
                   <Plus className="h-3.5 w-3.5" /> Add Item
                 </Button>
@@ -664,7 +624,7 @@ function NewOrderPageContent() {
 
               {/* Added items list */}
               {itemsList.length === 0 ? (
-                <p className="text-center text-xs text-gray-400 py-3">No items added yet. Add at least one item above.</p>
+                <p className="text-center text-xs text-gray-400 py-3">No items added yet. Tap "Add Item" above to choose items.</p>
               ) : (
                 <div className="space-y-2">
                   {itemsList.map((it) => (
@@ -677,16 +637,18 @@ function NewOrderPageContent() {
                       <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
+                          disabled={searching}
                           onClick={() => handleDecreaseItem(it.id)}
-                          className="h-7 w-7 flex items-center justify-center rounded-full border border-gray-200 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                          className="h-7 w-7 flex items-center justify-center rounded-full border border-gray-200 hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-50"
                         >
                           <Minus className="h-3 w-3 text-gray-600" />
                         </button>
                         <span className="w-6 text-center text-sm font-bold text-gray-800">{it.quantity}</span>
                         <button
                           type="button"
+                          disabled={searching}
                           onClick={() => handleIncreaseItem(it.id)}
-                          className="h-7 w-7 flex items-center justify-center rounded-full border border-gray-200 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                          className="h-7 w-7 flex items-center justify-center rounded-full border border-gray-200 hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-50"
                         >
                           <Plus className="h-3 w-3 text-gray-600" />
                         </button>
@@ -698,8 +660,9 @@ function NewOrderPageContent() {
 
                       <button
                         type="button"
+                        disabled={searching}
                         onClick={() => handleRemoveItem(it.id)}
-                        className="h-7 w-7 flex items-center justify-center rounded-full hover:bg-red-50 active:bg-red-100 transition-colors shrink-0"
+                        className="h-7 w-7 flex items-center justify-center rounded-full hover:bg-red-50 active:bg-red-100 transition-colors shrink-0 disabled:opacity-50"
                       >
                         <Trash2 className="h-3.5 w-3.5 text-red-500" />
                       </button>
@@ -708,7 +671,7 @@ function NewOrderPageContent() {
                 </div>
               )}
 
-              {/* Running total — quantity + grand total, jo payload me jayega */}
+              {/* Running total */}
               {itemsList.length > 0 && (
                 <div className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
                   <div className="flex items-center gap-1.5 text-blue-700">
@@ -720,7 +683,7 @@ function NewOrderPageContent() {
               )}
             </div>
 
-            {/* --- SECTION 4: PAYMENT & BILLING --- */}
+            {/* SECTION 4: PAYMENT & BILLING */}
             <div className="space-y-3">
               <div className="flex items-center gap-2 pb-1 border-b border-gray-100">
                 <CreditCard className="h-4 w-4 text-blue-600 shrink-0" />
@@ -732,9 +695,10 @@ function NewOrderPageContent() {
                   <label className="text-xs font-medium text-gray-600">Payment Status *</label>
                   <Select
                     value={formData.paymentStatus}
+                    disabled={searching}
                     onValueChange={(val) => handleSelectChange('paymentStatus', val)}
                   >
-                    <SelectTrigger className="h-10 sm:h-9 w-full bg-gray-50/50 border-gray-200 text-sm">
+                    <SelectTrigger className="h-10 sm:h-9 w-full bg-gray-50/50 border-gray-200 text-sm disabled:opacity-60">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -745,25 +709,29 @@ function NewOrderPageContent() {
                   </Select>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-gray-600">Payment Method</label>
-                  <Select
-                    value={formData.paymentMethod}
-                    onValueChange={(val) => handleSelectChange('paymentMethod', val)}
-                  >
-                    <SelectTrigger className="h-10 sm:h-9 w-full bg-gray-50/50 border-gray-200 text-sm">
-                      <div className="flex items-center gap-2">
-                        <Wallet className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                        <SelectValue />
-                      </div>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cash">💵 Cash</SelectItem>
-                      <SelectItem value="account">🏦 Account</SelectItem>
-                      <SelectItem value="online">📱 Online</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                {/* ✨ Payment Method - ONLY SHOW when payment status is "paid" */}
+                {formData.paymentStatus === 'paid' && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-600">Payment Method</label>
+                    <Select
+                      value={formData.paymentMethod}
+                      disabled={searching}
+                      onValueChange={(val) => handleSelectChange('paymentMethod', val)}
+                    >
+                      <SelectTrigger className="h-10 sm:h-9 w-full bg-gray-50/50 border-gray-200 text-sm disabled:opacity-60">
+                        <div className="flex items-center gap-2">
+                          <Wallet className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                          <SelectValue />
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">💵 Cash</SelectItem>
+                        <SelectItem value="account">🏦 Account</SelectItem>
+                        <SelectItem value="online">📱 Online</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="sm:col-span-2 space-y-1">
                   <label className="text-xs font-medium text-gray-600">Notes</label>
@@ -771,9 +739,10 @@ function NewOrderPageContent() {
                     type="text"
                     name="notes"
                     placeholder="Urgent delivery, wrap separately etc."
+                    disabled={searching}
                     value={formData.notes}
                     onChange={(e) => setFormData(p => ({ ...p, notes: e.target.value }))}
-                    className="h-10 sm:h-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm"
+                    className="h-10 sm:h-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -782,15 +751,13 @@ function NewOrderPageContent() {
           </CardContent>
         </Card>
 
-        {/* --- ACTIONS PANEL ---
-            Mobile par full-width stacked buttons (thumb-friendly, always visible in normal page flow),
-            desktop par inline right-aligned. No "fixed" positioning here so it can never get hidden
-            behind other UI (bottom nav bars, etc.) — it just sits at the end of the form. */}
+        {/* ACTIONS PANEL */}
         <div className="grid grid-cols-2 sm:flex sm:flex-row sm:items-center sm:justify-end gap-2 px-1 pb-2">
           <Button
             type="button"
             variant="outline"
-            className="h-11 sm:h-9 px-3 border-gray-200 text-gray-700 bg-white hover:bg-gray-50 rounded-lg text-xs font-medium transition-colors w-full sm:w-auto"
+            disabled={searching}
+            className="h-11 sm:h-9 px-3 border-gray-200 text-gray-700 bg-white hover:bg-gray-50 rounded-lg text-xs font-medium transition-colors w-full sm:w-auto disabled:opacity-60"
             onClick={resetForm}
           >
             <RotateCcw className="mr-1.5 h-3.5 w-3.5 text-gray-400 inline" /> Reset
@@ -798,13 +765,18 @@ function NewOrderPageContent() {
 
           <Button
             type="submit"
-            disabled={loading}
-            className="h-11 sm:h-9 px-4 bg-blue-600 hover:bg-blue-700 text-white shadow-sm rounded-lg text-xs font-medium transition-all gap-1.5 w-full sm:w-auto"
+            disabled={loading || searching}
+            className="h-11 sm:h-9 px-4 bg-blue-600 hover:bg-blue-700 text-white shadow-sm rounded-lg text-xs font-medium transition-all gap-1.5 w-full sm:w-auto disabled:opacity-60"
           >
             {loading ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 {isEditMode ? 'Updating...' : 'Saving...'}
+              </>
+            ) : searching ? (
+              <>
+                <Lock className="h-3.5 w-3.5" />
+                Please wait...
               </>
             ) : (
               <>
@@ -815,12 +787,70 @@ function NewOrderPageContent() {
           </Button>
         </div>
       </form>
+
+      {/* Item picker modal */}
+      <Dialog open={itemPickerOpen} onOpenChange={setItemPickerOpen}>
+        <DialogContent className="sm:max-w-lg w-[92vw] rounded-xl max-h-[85vh] overflow-y-auto bg-white z-[100] border border-gray-200 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Select Items</DialogTitle>
+            <DialogDescription>Choose one or more items to add to this order.</DialogDescription>
+          </DialogHeader>
+
+          {itemsLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+            </div>
+          ) : availableItems.length === 0 ? (
+            <p className="text-center text-xs text-gray-400 py-6">No items found.</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 py-2">
+              {availableItems.map((item) => {
+                const id = item._id || item.id;
+                const name = item.itemName || item.serviceType || item.title || 'Item';
+                const price = item.price ?? item.itemPrice ?? 0;
+                const checked = selectedItemIds.has(id);
+
+                return (
+                  <label
+                    key={id}
+                    className={`flex items-center gap-2 border rounded-lg px-2.5 py-2 cursor-pointer transition-colors ${
+                      checked ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleItemSelect(id)}
+                      className="h-4 w-4 accent-blue-600 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-800 truncate capitalize">{name}</p>
+                      <p className="text-[11px] text-gray-400">Rs. {price}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2 sm:justify-end pt-2">
+            <Button variant="outline" onClick={() => setItemPickerOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleConfirmAddItems}
+              disabled={itemsLoading}
+            >
+              Add Selected ({selectedItemIds.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-// ✅ FIX: Default export is now a thin wrapper that provides the
-// required Suspense boundary around the component using useSearchParams().
 export default function NewOrderPage() {
   return (
     <Suspense
