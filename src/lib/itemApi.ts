@@ -1,8 +1,8 @@
 import axios from "axios";
 
 // `.env` se URL read karein, live par yeh automatic sahi uthayega
-const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3002";
-
+// const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3002";
+const API_URL = "https://decent-laundry-backend.vercel.app/api";
 export const itemApi = {
   getAll: async (params?: any) => {
     const res = await axios.get(`${API_URL}/items`, { params });
