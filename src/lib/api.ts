@@ -1,6 +1,7 @@
 import axios from "axios";
 
 const API_URL = "https://decent-laundry-backend.vercel.app/api";
+// const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3002";
 
 export const orderApi = {
   // GET ALL
@@ -43,11 +44,20 @@ export const orderApi = {
     return res.data;
   },
 
-  // UPDATE STATUS (FIX ERROR)
-  updateStatus: async (orderId: string, status: string) => {
+  // ✅ UPDATED: ab optional 3rd "extra" param bhi accept karta hai,
+  // taake Send to Laundry (sendingDate) aur Received from Laundry (receivingDate)
+  // dono status ke sath hi ek hi request mein save ho jaein.
+  updateStatus: async (
+    orderId: string,
+    status: string,
+    extra?: { sendingDate?: string; receivingDate?: string;  laundryQuantity?: number; }
+  ) => {
     const res = await axios.patch(`${API_URL}/orders/${orderId}`, {
       status,
+      ...extra,
     });
+    console.log(res , "res>>>>>>>>>>>>>>>>>>>>");
+    
     return res.data;
   },
 

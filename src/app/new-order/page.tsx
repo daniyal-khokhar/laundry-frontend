@@ -51,6 +51,10 @@ import {
   ShoppingBag,
   Receipt,
   Lock,
+  HandCoins,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  Percent,
 } from "lucide-react";
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -88,6 +92,11 @@ function NewOrderPageContent() {
     deliveryDate: '',
     notes: '',
     status: 'pending',
+    // how much the customer has actually paid/advanced right now.
+    // Kept as number | '' so the field can be fully cleared while typing.
+    amountReceived: 0 as number | '',
+    // ✅ NEW: discount percentage applied on the total bill (e.g. 20 for 20%).
+    discountPercent: 0 as number | '',
   });
 
   // Cart items
@@ -107,6 +116,38 @@ function NewOrderPageContent() {
   // Cart totals
   const totalQuantity = itemsList.reduce((sum, it) => sum + it.quantity, 0);
   const grandTotal = itemsList.reduce((sum, it) => sum + it.quantity * it.itemPrice, 0);
+
+  // ✅ NEW: discount maths.
+  // discountPercentNum -> the % typed in (e.g. 20).
+  // discountAmount -> Rs value of that % taken off the total bill.
+  // netPayable -> what the customer actually needs to pay after discount.
+  const discountPercentNum = formData.discountPercent === '' ? 0 : Number(formData.discountPercent);
+  const discountAmount = Math.round((grandTotal * discountPercentNum) / 100);
+  const netPayable = Math.max(0, grandTotal - discountAmount);
+
+  // payment maths — now based on netPayable (after discount), not the raw grandTotal.
+  // amountReceivedNum = what the customer has actually handed over right now.
+  // balanceAmount > 0  -> customer still OWES this much (balance due).
+  // balanceAmount < 0  -> customer OVERPAID -> this is their advance/credit.
+  // balanceAmount = 0  -> fully settled.
+  const amountReceivedNum = formData.amountReceived === '' ? 0 : Number(formData.amountReceived);
+  const balanceAmount = netPayable - amountReceivedNum;
+  const balanceDue = balanceAmount > 0 ? balanceAmount : 0;
+  const advanceCredit = balanceAmount < 0 ? Math.abs(balanceAmount) : 0;
+  const paidPercent = netPayable > 0 ? Math.min(100, Math.round((amountReceivedNum / netPayable) * 100)) : 0;
+
+  // keep Payment Status in sync with the amount actually received (against netPayable).
+  // Still fully editable by hand afterwards — this just sets a sensible default.
+  useEffect(() => {
+    if (itemsList.length === 0) return;
+    let derived: PaymentStatus = 'unpaid';
+    if (amountReceivedNum <= 0) derived = 'unpaid';
+    else if (amountReceivedNum >= netPayable) derived = 'paid';
+    else derived = 'partial';
+
+    setFormData((prev) => (prev.paymentStatus === derived ? prev : { ...prev, paymentStatus: derived }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amountReceivedNum, netPayable, itemsList.length]);
 
   // Auto-search for existing customer/order
   const handleAutoSearch = async (searchType: 'name' | 'code', value: string) => {
@@ -306,8 +347,18 @@ const handleSubmit = async (e: React.FormEvent) => {
       itemsList,
       serviceType: itemsList[0]?.serviceType || 'wash',
       quantity: totalQuantity,
-      price: grandTotal,
+      // ✅ price now stores the NET payable amount (after discount) — this is
+      // what shows everywhere else in the app (orders list, receipts, etc).
+      price: netPayable,
       deliveryDate: formData.deliveryDate ? new Date(formData.deliveryDate) : undefined,
+      // ✅ NEW: discount + advance / partial-payment breakdown saved with the order.
+      discountPercent: discountPercentNum,
+      discountAmount,
+      netPayable,
+      amountReceived: amountReceivedNum,
+      balanceAmount, // signed: positive = customer owes, negative = advance/credit
+      balanceDue,
+      advanceCredit,
     };
 
     if (isEditMode && editId) {
@@ -351,6 +402,8 @@ const handleSubmit = async (e: React.FormEvent) => {
       deliveryDate: '',
       notes: '',
       status: '',
+      amountReceived: 0,
+      discountPercent: 0,
     });
     setItemsList([]);
   };
@@ -386,6 +439,9 @@ const handleSubmit = async (e: React.FormEvent) => {
             : '',
           notes: order.notes || '',
           status: order.status || '',
+          // restore previously saved amount received / discount when editing
+          amountReceived: typeof order.amountReceived === 'number' ? order.amountReceived : 0,
+          discountPercent: typeof order.discountPercent === 'number' ? order.discountPercent : 0,
         });
 
         if (Array.isArray(order.itemsList) && order.itemsList.length > 0) {
@@ -730,6 +786,126 @@ const handleSubmit = async (e: React.FormEvent) => {
                         <SelectItem value="online">📱 Online</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                )}
+
+                {/* ✅ NEW: Discount % — reduces the bill before payment/balance maths. */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                    <Percent className="h-3.5 w-3.5 text-gray-400" />
+                    Discount %
+                  </label>
+                  <div className="relative">
+                    <Percent className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="0"
+                      disabled={searching}
+                      value={formData.discountPercent === '' ? '' : formData.discountPercent}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          setFormData(p => ({ ...p, discountPercent: '' }));
+                          return;
+                        }
+                        const num = Number(raw);
+                        if (!isNaN(num)) setFormData(p => ({ ...p, discountPercent: num }));
+                      }}
+                      onBlur={() => {
+                        setFormData(p => ({
+                          ...p,
+                          discountPercent: p.discountPercent === '' ? 0 : Math.min(100, Math.max(0, Number(p.discountPercent) || 0)),
+                        }));
+                      }}
+                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                {/* Amount Received — the advance/partial payment the customer
+                    is handing over right now. Kept clearable (no forced 0). */}
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-600 flex items-center gap-1.5">
+                    <HandCoins className="h-3.5 w-3.5 text-gray-400" />
+                    Amount Received
+                  </label>
+                  <div className="relative">
+                    <Wallet className="absolute left-3 top-2.5 h-3.5 w-3.5 text-gray-400" />
+                    <Input
+                      type="number"
+                      min={0}
+                      placeholder="0"
+                      disabled={searching}
+                      value={formData.amountReceived === '' ? '' : formData.amountReceived}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          setFormData(p => ({ ...p, amountReceived: '' }));
+                          return;
+                        }
+                        const num = Number(raw);
+                        if (!isNaN(num)) setFormData(p => ({ ...p, amountReceived: num }));
+                      }}
+                      onBlur={() => {
+                        setFormData(p => ({
+                          ...p,
+                          amountReceived: p.amountReceived === '' ? 0 : Math.max(0, Number(p.amountReceived) || 0),
+                        }));
+                      }}
+                      className="h-10 sm:h-9 pl-9 bg-gray-50/50 border-gray-200 focus-visible:ring-blue-500 text-sm disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                {/* ✅ NEW: live Bill / Discount / Net Payable / Balance summary */}
+                {itemsList.length > 0 && (
+                  <div
+                    className={`sm:col-span-2 rounded-lg border px-3 py-2.5 space-y-1.5 ${
+                      balanceAmount > 0
+                        ? 'bg-rose-50 border-rose-100'
+                        : balanceAmount < 0
+                          ? 'bg-emerald-50 border-emerald-100'
+                          : 'bg-gray-50 border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500">Total Bill</span>
+                      <span className="font-semibold text-gray-800">Rs. {grandTotal}</span>
+                    </div>
+                    {discountPercentNum > 0 && (
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-500">Discount ({discountPercentNum}%)</span>
+                        <span className="font-semibold text-amber-600">- Rs. {discountAmount}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500 font-semibold">Net Payable</span>
+                      <span className="font-bold text-gray-900">Rs. {netPayable}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-500">Amount Received</span>
+                      <span className="font-semibold text-gray-800">Rs. {amountReceivedNum} ({paidPercent}%)</span>
+                    </div>
+                    <div className="flex items-center justify-between pt-1.5 border-t border-black/5">
+                      <span
+                        className={`text-xs font-bold flex items-center gap-1 ${
+                          balanceAmount > 0 ? 'text-rose-600' : balanceAmount < 0 ? 'text-emerald-600' : 'text-gray-600'
+                        }`}
+                      >
+                        {balanceAmount > 0 && <ArrowUpCircle className="h-3.5 w-3.5" />}
+                        {balanceAmount < 0 && <ArrowDownCircle className="h-3.5 w-3.5" />}
+                        {balanceAmount > 0 ? 'Balance Due' : balanceAmount < 0 ? 'Advance / Credit' : 'Fully Paid'}
+                      </span>
+                      <span
+                        className={`text-sm font-bold ${
+                          balanceAmount > 0 ? 'text-rose-600' : balanceAmount < 0 ? 'text-emerald-600' : 'text-gray-700'
+                        }`}
+                      >
+                        Rs. {Math.abs(balanceAmount)}
+                      </span>
+                    </div>
                   </div>
                 )}
 
