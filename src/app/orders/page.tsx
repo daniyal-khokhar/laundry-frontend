@@ -43,7 +43,7 @@ import {
   HandCoins,
   ArrowUpCircle,
   ArrowDownCircle,
-  BadgePercent,
+  Percent,
 } from "lucide-react";
 import {
   Dialog,
@@ -104,15 +104,18 @@ const getPressOnlyQty = (order: any): number => {
 const isCurrentlyInLaundry = (order: any): boolean =>
   isLaundryOrder(order) && order.status === 'processing';
 
-// computes the payment breakdown for an order using amountReceived
-// if it was saved on the order, otherwise falls back to paymentStatus.
+// computes the payment breakdown for an order using amountReceived if it was
+// saved on the order, otherwise falls back to paymentStatus.
 // balance > 0  -> customer still owes this much (balance due)
 // balance < 0  -> customer overpaid -> this is their advance/credit
+// ✅ NEW: also carries discountPercent / discountAmount when saved on the order.
 const getPaymentBreakdown = (order: any) => {
   const total = Number(order?.price) || 0;
   const received = typeof order?.amountReceived === 'number' ? order.amountReceived : null;
   if (received === null) return null; // older orders without this field saved
   const balance = total - received;
+  const discountPercent = typeof order?.discountPercent === 'number' ? order.discountPercent : 0;
+  const discountAmount = typeof order?.discountAmount === 'number' ? order.discountAmount : 0;
   return {
     total,
     received,
@@ -120,6 +123,8 @@ const getPaymentBreakdown = (order: any) => {
     balanceDue: balance > 0 ? balance : 0,
     advanceCredit: balance < 0 ? Math.abs(balance) : 0,
     paidPercent: total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0,
+    discountPercent,
+    discountAmount,
   };
 };
 
@@ -951,23 +956,6 @@ function OrdersPageContent() {
                       <Wallet className="h-3 w-3 text-gray-400" /> {orderToView.paymentMethod || 'cash'}
                     </p>
                   </div>
-                  {/* ✅ NEW: Discount % and Discount Amount — only shown when present on the order */}
-                  {(Number(orderToView.discountPercent) > 0 || Number(orderToView.discountAmount) > 0) && (
-                    <>
-                      <div>
-                        <p className="text-[11px] text-gray-400">Discount %</p>
-                        <p className="font-medium text-gray-800 flex items-center gap-1">
-                          <BadgePercent className="h-3 w-3 text-gray-400" />
-                          {orderToView.discountPercent ?? 0}%
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-[11px] text-gray-400">Discount Amount</p>
-                        <p className="font-bold text-rose-600">- Rs. {orderToView.discountAmount ?? 0}</p>
-                      </div>
-                    </>
-                  )}
-
                   {orderToView.deliveryDate && (
                     <div>
                       <p className="text-[11px] text-gray-400">Delivery Date</p>
@@ -1017,6 +1005,66 @@ function OrdersPageContent() {
                   </div>
                 )}
               </div>
+
+              {/* Payment / Discount / Advance breakdown — only shown when the order
+                  actually has amountReceived saved on it (from the New Order form) */}
+              {(() => {
+                const pb = getPaymentBreakdown(orderToView);
+                if (!pb) return null;
+                return (
+                  <div className="border-t border-gray-100 pt-3 space-y-1.5">
+                    <p className="text-xs font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+                      <HandCoins className="h-3.5 w-3.5 text-gray-400" /> Payment Breakdown
+                    </p>
+                    <div
+                      className={`rounded-lg border px-3 py-2.5 space-y-1.5 ${
+                        pb.balance > 0
+                          ? 'bg-rose-50 border-rose-100'
+                          : pb.balance < 0
+                            ? 'bg-emerald-50 border-emerald-100'
+                            : 'bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      {/* ✅ NEW: Discount % + Discount Amount, only if a discount was applied */}
+                      {pb.discountPercent > 0 && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-500 flex items-center gap-1">
+                            <Percent className="h-3 w-3 text-gray-400" />
+                            Discount ({pb.discountPercent}%)
+                          </span>
+                          <span className="font-semibold text-amber-600">- Rs. {pb.discountAmount}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-500">{pb.discountPercent > 0 ? 'Net Payable' : 'Total Bill'}</span>
+                        <span className="font-semibold text-gray-800">Rs. {pb.total}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-gray-500">Amount Received</span>
+                        <span className="font-semibold text-gray-800">Rs. {pb.received} ({pb.paidPercent}%)</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-1.5 border-t border-black/5">
+                        <span
+                          className={`text-xs font-bold flex items-center gap-1 ${
+                            pb.balance > 0 ? 'text-rose-600' : pb.balance < 0 ? 'text-emerald-600' : 'text-gray-600'
+                          }`}
+                        >
+                          {pb.balance > 0 && <ArrowUpCircle className="h-3.5 w-3.5" />}
+                          {pb.balance < 0 && <ArrowDownCircle className="h-3.5 w-3.5" />}
+                          {pb.balance > 0 ? 'Balance Due' : pb.balance < 0 ? 'Advance / Credit' : 'Fully Paid'}
+                        </span>
+                        <span
+                          className={`text-sm font-bold ${
+                            pb.balance > 0 ? 'text-rose-600' : pb.balance < 0 ? 'text-emerald-600' : 'text-gray-700'
+                          }`}
+                        >
+                          Rs. {Math.abs(pb.balance)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Press / Laundry breakdown chip */}
               {isLaundryOrder(orderToView) && (
